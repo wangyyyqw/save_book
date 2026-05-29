@@ -1,0 +1,9 @@
+[project]
+name = "qidian-save"
+version = "0.1.0"
+description = "起点中文网书籍本地保存工具"
+requires-python = ">=3.9"
+dependencies = ["requests>=2.28"]
+
+[project.scripts]
+qidian-save = "qidian_save.cli:main"
