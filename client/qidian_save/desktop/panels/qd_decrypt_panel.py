@@ -53,7 +53,7 @@ class QDDecryptPanel(QWidget):
         tr.addWidget(self.label_device)
 
         self.input_device = QLineEdit()
-        self.input_device.setPlaceholderText("设备号（留空自动）")
+        self.input_device.setPlaceholderText("端口号（留空自动检测手机）")
         self.input_device.setFixedWidth(180)
         self.input_device.setFixedHeight(34)
         self.input_device.setStyleSheet(
@@ -190,6 +190,28 @@ class QDDecryptPanel(QWidget):
 
     # ── ADB 检测 ────────────────────────────────────────────────────
 
+    def _resolve_serial(self) -> str | None:
+        """解析设备号输入框的值到设备序列号
+
+        - 纯数字（如 5555）→ 127.0.0.1:<port>
+        - 含 ip:port → 原样使用
+        - 留空 → 自动检测，过滤模拟器，取第一个真机
+        """
+        text = self.input_device.text().strip()
+        if not text:
+            from ...adb_utils import list_devices
+            devices = list_devices()
+            # 过滤掉模拟器（serial 含 emulator 字样的）
+            real = [d for d in devices if "emulator" not in d["serial"]]
+            if real:
+                return real[0]["serial"]
+            if devices:
+                return devices[0]["serial"]
+            return None
+        if text.isdigit():
+            return f"127.0.0.1:{text}"
+        return text
+
     def _check_device(self):
         try:
             from ...adb_utils import check_device
@@ -206,9 +228,9 @@ class QDDecryptPanel(QWidget):
 
     def _root_extract(self):
         """从已 root 设备/模拟器直接提取解密参数"""
-        serial = self.input_device.text().strip() or None
-        label = f"设备 {serial}" if serial else "当前设备"
-        self._append_log(f"🛠️ 正在通过 root 从 {label} 提取参数...")
+        serial = self._resolve_serial()
+        label = serial or "当前设备"
+        self._append_log(f"正在通过 root 从 {label} 提取参数...")
 
         def _run():
             try:
@@ -264,17 +286,17 @@ class QDDecryptPanel(QWidget):
     # （mitmproxy 参数捕获已移除，使用 🛠️ root提取 替代）
 
     def _pull_books(self):
-        serial = self.input_device.text().strip() or None
-        label = f"设备 {serial}" if serial else "手机"
+        serial = self._resolve_serial()
+        if not serial:
+            self._sig.error.emit("未检测到 Android 设备，请连接 USB 或输入端口号")
+            return
+        label = serial
+
         self._set_busy(True, "拉取中...")
 
         def _run():
             try:
-                from ...adb_utils import pull_device_files, check_device
-                if not check_device():
-                    self._sig.error.emit("未检测到 Android 设备，请连接 USB 或输入设备号")
-                    self._set_busy_from_thread(False)
-                    return
+                from ...adb_utils import pull_device_files
 
                 output = str(Path(__file__).resolve().parent.parent.parent.parent / "qd_files")
                 self._qd_dir = output

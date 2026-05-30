@@ -37,3 +37,6 @@ _capture_runner.py
 
 # Non-essential ADB extras (keep only what's needed for basic adb)
 client/adb/extra/
+
+# APK files
+*.apk
