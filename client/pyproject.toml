@@ -11,3 +11,6 @@ dependencies = [
 
 [project.scripts]
 qidian-save = "qidian_save.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["qidian_save", "qidian_save.*"]
