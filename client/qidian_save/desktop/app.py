@@ -159,9 +159,10 @@ class MainWindow(FluentWindow):
         self.switchTo(self.panels["detail"])
 
     def _on_backup_started(self, task_id: int, server_crawl: bool = True,
-                           book_id: str = "", qd_cookies: dict = None):
+                           book_id: str = "", qd_cookies: dict = None,
+                           start: int = 1, end: int = 0):
         self.current_task_id = task_id
-        self.panels["backup"].load_task(task_id, server_crawl, book_id, qd_cookies)
+        self.panels["backup"].load_task(task_id, server_crawl, book_id, qd_cookies, start, end)
         self.switchTo(self.panels["backup"])
 
     # ── 主题 ───────────────────────────────────────────────

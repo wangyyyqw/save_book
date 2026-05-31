@@ -159,13 +159,18 @@ class BackupPanel(QWidget):
         layout.addWidget(controls)
 
     def load_task(self, task_id: int, server_crawl: bool = True,
-                  book_id: str = "", qd_cookies: dict = None):
+                  book_id: str = "", qd_cookies: dict = None,
+                  start: int = 1, end: int = 0):
         self.task_id = task_id
         self._server_crawl = server_crawl
         self._book_id = book_id
         self._qd_cookies = qd_cookies or {}
+        self._crawl_start = start
+        self._crawl_end = end
+        self._crawling = False
         self.table.setRowCount(0)
         if server_crawl:
+            self._polling = False  # reset in case a previous task was still polling
             self._start_polling()
         else:
             self._start_local_crawl()
@@ -200,6 +205,9 @@ class BackupPanel(QWidget):
 
     def _start_local_crawl(self):
         """启动本地爬取线程"""
+        if self._crawling:
+            return
+        self._crawling = True
         self.label_book.setText(f"正在本地爬取... (任务 #{self.task_id})")
         self.label_status.setText("准备中...")
 
@@ -215,7 +223,10 @@ class BackupPanel(QWidget):
                     return
 
                 chapters = cat["chapters"]
-                target = chapters
+                total = len(chapters)
+                end_idx = min(self._crawl_end or total, total)
+                start_idx = max(1, self._crawl_start) - 1
+                target = chapters[start_idx:end_idx]
                 success = 0
                 failed = 0
 
@@ -283,6 +294,8 @@ class BackupPanel(QWidget):
 
             except Exception as e:
                 self._crawl_sig.error.emit(str(e))
+            finally:
+                self._crawling = False
 
         import threading
         threading.Thread(target=_do, daemon=True).start()

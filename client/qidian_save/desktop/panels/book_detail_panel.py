@@ -13,7 +13,7 @@ from ...qidian_client import get_catalog as qidian_catalog, load_cookies
 class _DetailSignal(QObject):
     catalog_ready = pyqtSignal(dict)
     catalog_error = pyqtSignal(str)
-    backup_done = pyqtSignal(int, bool)  # (task_id, is_server_crawl)
+    backup_done = pyqtSignal(int, bool, int, int)  # (task_id, is_server_crawl, start, end)
     backup_failed = pyqtSignal(str)
     backup_finished = pyqtSignal()
 
@@ -267,12 +267,12 @@ class BookDetailPanel(QWidget):
                     try:
                         cr = self.client.upload_qidian_cookies(qd_cookies)
                         cookies_ref = cr.get("cookiesRef", "")
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        print(f"[detail] Cookie 上传失败: {e}", file=sys.stderr)
                     result = self.client.start_backup(self.book_id, start, end,
                                                       cookies_ref=cookies_ref)
                     task_id = result["taskId"]
-                self._sig.backup_done.emit(task_id, server_crawl)
+                self._sig.backup_done.emit(task_id, server_crawl, start, end)
             except Exception as e:
                 print(f"[detail] 备份创建异常: {e}", file=sys.stderr)
                 self._sig.backup_failed.emit(str(e))
@@ -285,6 +285,6 @@ class BookDetailPanel(QWidget):
         self.btn_backup.setEnabled(True)
         self.btn_backup.setText("  开始备份")
 
-    def _on_backup_done(self, task_id: int, server_crawl: bool):
+    def _on_backup_done(self, task_id: int, server_crawl: bool, start: int, end: int):
         qd_cookies = load_cookies()
-        self.on_backup_started(task_id, server_crawl, self.book_id, qd_cookies)
+        self.on_backup_started(task_id, server_crawl, self.book_id, qd_cookies, start, end)
