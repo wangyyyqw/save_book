@@ -156,7 +156,6 @@ class MainWindow(FluentWindow):
         self.detail_panel = self.panels["detail"]
         self.detail_panel.setObjectName("panel_detail")
         self.stackedWidget.addWidget(self.detail_panel)
-        self.stack: QStackedWidget  # FluentWindow 内部 stack
         # 找到 FluentWindow 内部的 QStackedWidget 以便直接切换
 
     def _on_book_selected(self, book_id: str, book_name: str):
