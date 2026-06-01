@@ -62,6 +62,27 @@ class BackupPanelPollingTests(unittest.TestCase):
         self.assertTrue(thread_cls.called)
         self.assertEqual(client.calls, 0)
 
+    def test_stale_poll_response_is_rejected(self):
+        """返回旧任务的结果不覆盖新任务状态"""
+        client = FakeClient()
+        panel = BackupPanel(client)
+        panel.load_task(1, server_crawl=True)
+        gen1 = panel._poll_gen
+
+        # 模拟切换到任务 2
+        panel.load_task(2, server_crawl=True)
+        self.assertGreater(panel._poll_gen, gen1)
+
+        # 用旧 generation 调用 _on_poll_status — 应被拒绝
+        status = {"bookName": "Old", "bookId": "1", "status": "completed",
+                  "totalChapters": 5, "completedChapters": 5, "failedChapters": 0}
+        panel._on_poll_status(1, gen1, status)
+
+        # UI 不应被旧结果覆盖
+        self.assertEqual(panel.task_id, 2)
+        self.assertNotIn("Old", panel.label_book.text())
+        self.assertTrue(panel._polling, "旧 completed 不应停止当前任务轮询")
+
 
 if __name__ == "__main__":
     unittest.main()

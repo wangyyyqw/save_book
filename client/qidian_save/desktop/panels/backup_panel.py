@@ -28,7 +28,7 @@ class _CrawlSignals(QObject):
 
 class _PollSignals(QObject):
     """轮询线程 → UI 主线程的信号"""
-    status_ready = pyqtSignal(dict)
+    status_ready = pyqtSignal(int, int, dict)  # (task_id, generation, status)
     error = pyqtSignal(str)
 
 
@@ -55,6 +55,7 @@ class BackupPanel(QWidget):
         self._poll_sig.status_ready.connect(self._on_poll_status)
         self._poll_sig.error.connect(self._on_poll_error)
         self._poll_in_flight = False
+        self._poll_gen = 0
         self._poll_timer = QTimer(self)
         self._poll_timer.timeout.connect(self._poll_task)
         self._init_ui()
@@ -177,6 +178,7 @@ class BackupPanel(QWidget):
         self._polling = False
         self._poll_timer.stop()
         self._poll_in_flight = False
+        self._poll_gen += 1
         self.task_id = task_id
         self._server_crawl = server_crawl
         self._book_id = book_id
@@ -202,6 +204,7 @@ class BackupPanel(QWidget):
             return
 
         task_id = self.task_id
+        gen = self._poll_gen
         self._poll_in_flight = True
 
         def _run():
@@ -210,12 +213,14 @@ class BackupPanel(QWidget):
             except Exception as e:
                 self._poll_sig.error.emit(str(e))
                 return
-            self._poll_sig.status_ready.emit(status)
+            self._poll_sig.status_ready.emit(task_id, gen, status)
 
         threading.Thread(target=_run, daemon=True).start()
 
-    def _on_poll_status(self, status: dict):
+    def _on_poll_status(self, task_id: int, gen: int, status: dict):
         self._poll_in_flight = False
+        if task_id != self.task_id or gen != self._poll_gen:
+            return
         self.task_info = status
         total = status["totalChapters"]
         completed = status["completedChapters"]
