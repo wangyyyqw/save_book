@@ -19,6 +19,7 @@ class _DecryptSignal(QObject):
     book_list_ready = pyqtSignal(list)
     decrypt_done = pyqtSignal(str)
     params_ready = pyqtSignal(str, str, str)
+    busy_changed = pyqtSignal(bool)
     # capture_status 已废弃，由 extract_params() 替代
 
 
@@ -32,6 +33,7 @@ class QDDecryptPanel(QWidget):
         self._sig.book_list_ready.connect(self._show_books)
         self._sig.decrypt_done.connect(self._on_decrypt_done)
         self._sig.params_ready.connect(self._fill_params)
+        self._sig.busy_changed.connect(self._set_busy)
         self._qd_dir = ""           # 拉取到的 qd_files 目录
         self._current_book_id = ""  # 当前选中的书籍 ID
         self._current_book_dir = "" # 当前选中的书籍目录
@@ -706,7 +708,7 @@ class QDDecryptPanel(QWidget):
         QTimer.singleShot(10, lambda: None)
 
     def _set_busy_from_thread(self, busy: bool):
-        """从后台线程安全调用"""
-        QTimer.singleShot(0, lambda: self._set_busy(busy))
+        """Safely request busy-state changes from a worker thread."""
+        self._sig.busy_changed.emit(busy)
 
     # 按钮样式由全局 QSS 控制
