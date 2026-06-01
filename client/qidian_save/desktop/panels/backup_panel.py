@@ -44,6 +44,8 @@ class BackupPanel(QWidget):
         self._crawl_sig.batch_done.connect(self._on_crawl_batch_done)
         self._crawl_sig.finished.connect(self._on_crawl_finished)
         self._crawl_sig.error.connect(self._on_crawl_error)
+        self._poll_timer = QTimer(self)
+        self._poll_timer.timeout.connect(self._poll_task)
         self._init_ui()
 
     def _init_ui(self):
@@ -180,6 +182,7 @@ class BackupPanel(QWidget):
             return
         self._polling = True
         self._poll_task()
+        self._poll_timer.start(3000)
 
     def _poll_task(self):
         if not self.task_id:
@@ -199,6 +202,7 @@ class BackupPanel(QWidget):
 
             if status["status"] in ("completed", "failed"):
                 self._polling = False
+                self._poll_timer.stop()
 
         except Exception as e:
             self.label_status.setText(f"查询失败: {str(e)}")
@@ -412,6 +416,8 @@ class BackupPanel(QWidget):
         if not self.task_id:
             return
         try:
+            self._polling = False
+            self._poll_timer.stop()
             self.client.cleanup_task(self.task_id)
             self.label_book.setText("任务已清理")
             self.label_status.setText("")
