@@ -36,15 +36,14 @@ def cmd_desktop(args):
 def _get_client(args) -> QidianSaveClient:
     base = os.getenv("QIDIAN_SAVE_URL", "https://autohelp.asia/")
     token = os.getenv("QIDIAN_SAVE_TOKEN", "") or _load_token()
-    api_key = os.getenv("QIDIAN_SAVE_API_KEY", "")
-    return QidianSaveClient(base, token=token, api_key=api_key)
+    return QidianSaveClient(base, token=token)
 
 def cmd_login(args):
-    """GitHub Device Flow 登录"""
+    """邮箱+密码登录（fastapi-users）"""
     client = _get_client(args)
 
     if args.token:
-        # 直接设置 Token
+        # 直接设置 Token（跳过登录，与旧版兼容）
         client.set_token(args.token)
         try:
             user = client.get_me()
@@ -55,40 +54,24 @@ def cmd_login(args):
             print(f"Token 无效: {e}")
         return
 
-    # GitHub Device Flow
-    print("正在发起 GitHub Device Flow 登录...")
-    dc = client.login_github_device_code()
-    print(f"\n请在浏览器中打开: {dc['verification_uri']}")
-    print(f"并输入代码: {dc['user_code']}\n")
+    email = args.email or input("邮箱: ").strip()
+    password = args.password or input("密码: ").strip()
 
-    webbrowser.open("https://github.com/login/device")
+    if not email or not password:
+        print("邮箱和密码不能为空")
+        return
 
-    interval = dc.get("interval", 5)
-    while True:
-        result = client.login_github_poll_token(dc["device_code"])
-        status = result.get("status")
-
-        if status == "success":
-            token = result["token"]
-            user = result.get("user", {})
-            print(f"登录成功！用户: {user.get('username', '')}")
-            print(f"Token: {token[:20]}...")
-            _save_token(token)
-            print(f"Token 已保存到 {TOKEN_FILE}，下次启动将自动登录")
-            return
-        elif status == "slow_down":
-            interval = result.get("interval", interval + 5)
-            print(f"[{status}] 慢下来...")
-        elif status == "expired":
-            print("设备码已过期，请重新运行 login")
-            return
-        elif status == "denied":
-            print("用户取消了授权")
-            return
-        elif status == "pending":
-            print(".", end="", flush=True)
-
-        time.sleep(interval)
+    print("正在登录...")
+    try:
+        result = client.login_jwt(email, password)
+        token = result["access_token"]
+        client.set_token(token)
+        user = client.get_me()
+        print(f"登录成功！用户: {user.get('username', '')} (角色: {user.get('role', '')})")
+        _save_token(token)
+        print(f"Token 已保存到 {TOKEN_FILE}，下次启动将自动登录")
+    except Exception as e:
+        print(f"登录失败: {e}")
 
 def cmd_search(args):
     results = qidian_search(args.keyword)
@@ -370,17 +353,9 @@ def cmd_usage(args):
 
 
 def cmd_renew_api_key(args):
-    """重新生成 API Key"""
-    client = _get_client(args)
-    try:
-        print("正在重新生成 API Key...")
-        result = client.renew_api_key()
-        api_key = result.get("api_key", "未知")
-        print(f"\n新的 API Key: {api_key}")
-        print("请更新你的 API Key 配置。旧的 API Key 已失效。")
-    except Exception as e:
-        print(f"重新生成失败: {e}", file=sys.stderr)
-        sys.exit(1)
+    """API Key 已在 v3.0 移除，请使用邮箱+密码登录"""
+    print("API Key 功能已移除。")
+    print("请使用邮箱+密码登录: python -m qidian_save login")
 
 
 # ── .qd 配置 ──────────────────────────────────────────────────────
@@ -586,8 +561,10 @@ def build_parser():
     p.add_argument("--cookie-file", help="起点 Cookie JSON 文件路径")
     sub = p.add_subparsers(dest="command")
 
-    p_login = sub.add_parser("login", help="GitHub Device Flow 登录")
-    p_login.add_argument("--token", help="直接设置 JWT Token（跳过 OAuth）")
+    p_login = sub.add_parser("login", help="邮箱+密码登录（fastapi-users）")
+    p_login.add_argument("--token", help="直接设置 JWT Token（跳过登录）")
+    p_login.add_argument("--email", help="登录邮箱")
+    p_login.add_argument("--password", help="登录密码")
     p_login.set_defaults(func=cmd_login)
 
     p_search = sub.add_parser("search", help="搜索书籍")
@@ -626,7 +603,7 @@ def build_parser():
     p_usage = sub.add_parser("usage", help="查看用量")
     p_usage.set_defaults(func=cmd_usage)
 
-    p_renew = sub.add_parser("renew-api-key", help="重新生成 API Key")
+    p_renew = sub.add_parser("renew-api-key", help="[已废弃] API Key 已在 v3.0 移除")
     p_renew.set_defaults(func=cmd_renew_api_key)
 
     p_qd_cfg = sub.add_parser("qd-config", help="查看/设置 .qd 解密配置")

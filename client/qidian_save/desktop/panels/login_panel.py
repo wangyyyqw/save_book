@@ -1,18 +1,18 @@
-"""OAuth 登录面板 — 支持 GitHub Device Flow（样式由全局 QSS 控制）"""
-import webbrowser, threading, time
+"""登录面板 — 支持邮箱+密码登录/注册（fastapi-users）"""
+import threading
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-    QLineEdit, QFrame, QMessageBox,
+    QLineEdit, QFrame, QMessageBox, QStackedWidget,
 )
 from PyQt6.QtCore import Qt, QObject, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont
 
 
 class _LoginSignal(QObject):
-    device_code_ready = pyqtSignal(dict)
-    poll_result = pyqtSignal(dict)
-    login_error = pyqtSignal(str)
     login_success = pyqtSignal(str)
+    login_error = pyqtSignal(str)
+    register_ready = pyqtSignal(dict)
+    register_error = pyqtSignal(str)
     status_update = pyqtSignal(str, bool)
 
 
@@ -22,13 +22,11 @@ class LoginPanel(QWidget):
         self.client = client
         self.on_login_success = on_login_success
         self._sig = _LoginSignal()
-        self._sig.device_code_ready.connect(self._on_device_code)
-        self._sig.poll_result.connect(self._on_poll_result)
-        self._sig.login_error.connect(lambda e: self._set_status(f"登录失败: {e}", error=True))
         self._sig.login_success.connect(self._on_login_success)
+        self._sig.login_error.connect(lambda e: self._set_status(f"登录失败: {e}", error=True))
+        self._sig.register_ready.connect(self._on_register_ready)
+        self._sig.register_error.connect(lambda e: self._set_status(f"注册失败: {e}", error=True))
         self._sig.status_update.connect(self._set_status)
-        self._device_code = ""
-        self._polling = False
         self._init_ui()
 
     def _init_ui(self):
@@ -51,38 +49,88 @@ class LoginPanel(QWidget):
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         sl.addWidget(subtitle)
 
-        # ── GitHub Device Flow ──
-        self.btn_github = QPushButton("  使用 GitHub 登录")
-        self.btn_github.setProperty("btn-type", "secondary")
-        self.btn_github.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_github.setFixedHeight(44)
-        self.btn_github.clicked.connect(self._start_github_login)
-        sl.addWidget(self.btn_github)
+        # ── Mode switch: Login / Register ──
+        mode_row = QHBoxLayout()
+        self.btn_login_mode = QPushButton("登录")
+        self.btn_login_mode.setProperty("btn-type", "secondary")
+        self.btn_login_mode.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_login_mode.clicked.connect(lambda: self._switch_mode("login"))
+        mode_row.addWidget(self.btn_login_mode)
 
-        # ── Device Code display ──
-        self.code_card = QFrame()
-        self.code_card.setStyleSheet("background: #f0fdf4; border: 1px solid #86efac; border-radius: 8px; padding: 16px;")
-        self.code_card.setVisible(False)
-        cc = QVBoxLayout(self.code_card)
-        cc.setSpacing(8)
+        self.btn_register_mode = QPushButton("注册")
+        self.btn_register_mode.setProperty("btn-type", "secondary")
+        self.btn_register_mode.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_register_mode.clicked.connect(lambda: self._switch_mode("register"))
+        mode_row.addWidget(self.btn_register_mode)
 
-        self.label_code = QLabel("")
-        self.label_code.setStyleSheet("font-size: 28px; font-weight: bold; color: #166534; letter-spacing: 4px;")
-        self.label_code.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        cc.addWidget(self.label_code)
+        sl.addLayout(mode_row)
 
-        self.label_uri = QLabel("")
-        self.label_uri.setStyleSheet("font-size: 13px; color: #15803d;")
-        self.label_uri.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        cc.addWidget(self.label_uri)
+        # ── Stack: login / register form ──
+        self.stack = QStackedWidget()
 
-        self.btn_open = QPushButton("  打开浏览器")
-        self.btn_open.setProperty("btn-type", "secondary")
-        self.btn_open.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_open.clicked.connect(self._open_browser)
-        cc.addWidget(self.btn_open)
+        # -- Login form --
+        login_form = QFrame()
+        lf = QVBoxLayout(login_form)
+        lf.setSpacing(10)
 
-        sl.addWidget(self.code_card)
+        self.input_email = QLineEdit()
+        self.input_email.setPlaceholderText("邮箱")
+        lf.addWidget(self.input_email)
+
+        self.input_password = QLineEdit()
+        self.input_password.setPlaceholderText("密码")
+        self.input_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.input_password.returnPressed.connect(self._do_login)
+        lf.addWidget(self.input_password)
+
+        self.btn_login = QPushButton("  登录")
+        self.btn_login.setProperty("btn-type", "primary")
+        self.btn_login.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_login.setFixedHeight(44)
+        self.btn_login.clicked.connect(self._do_login)
+        lf.addWidget(self.btn_login)
+
+        self.btn_forgot = QPushButton("忘记密码？")
+        self.btn_forgot.setStyleSheet("font-size: 12px; color: #6b7280; border: none;")
+        self.btn_forgot.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_forgot.clicked.connect(self._forgot_password)
+        lf.addWidget(self.btn_forgot)
+
+        lf.addStretch()
+        login_form.setLayout(lf)
+        self.stack.addWidget(login_form)
+
+        # -- Register form --
+        register_form = QFrame()
+        rf = QVBoxLayout(register_form)
+        rf.setSpacing(10)
+
+        self.input_reg_email = QLineEdit()
+        self.input_reg_email.setPlaceholderText("邮箱")
+        rf.addWidget(self.input_reg_email)
+
+        self.input_reg_username = QLineEdit()
+        self.input_reg_username.setPlaceholderText("用户名")
+        rf.addWidget(self.input_reg_username)
+
+        self.input_reg_password = QLineEdit()
+        self.input_reg_password.setPlaceholderText("密码（至少 8 位）")
+        self.input_reg_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.input_reg_password.returnPressed.connect(self._do_register)
+        rf.addWidget(self.input_reg_password)
+
+        self.btn_register = QPushButton("  注册")
+        self.btn_register.setProperty("btn-type", "primary")
+        self.btn_register.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_register.setFixedHeight(44)
+        self.btn_register.clicked.connect(self._do_register)
+        rf.addWidget(self.btn_register)
+
+        rf.addStretch()
+        register_form.setLayout(rf)
+        self.stack.addWidget(register_form)
+
+        sl.addWidget(self.stack)
 
         # ── Status ──
         self.status_label = QLabel("")
@@ -113,95 +161,107 @@ class LoginPanel(QWidget):
 
         layout.addWidget(section)
 
+    def _switch_mode(self, mode: str):
+        self.stack.setCurrentIndex(0 if mode == "login" else 1)
+        self.btn_login_mode.setProperty("btn-type", "primary" if mode == "login" else "secondary")
+        self.btn_register_mode.setProperty("btn-type", "primary" if mode == "register" else "secondary")
+
     def _set_status(self, text: str, error: bool = False):
         p = self.status_label
         p.setText(text)
         p.setProperty("widget-type", "status-error" if error else "status-info")
-        # 强制 QSS 重新计算
         if p.style():
             p.style().unpolish(p)
             p.style().polish(p)
 
     def show_auto_login_status(self, text: str, error: bool = False):
-        """从外部设置自动登录状态（MainWindow._try_auto_login 调用）"""
         self._set_status(text, error)
 
-    def _start_github_login(self):
-        self.btn_github.setEnabled(False)
-        self._set_status("正在发起登录...")
+    # ── Login ──
+
+    def _do_login(self):
+        email = self.input_email.text().strip()
+        password = self.input_password.text().strip()
+        if not email or not password:
+            QMessageBox.warning(self, "提示", "请输入邮箱和密码")
+            return
+
+        self.btn_login.setEnabled(False)
+        self._set_status("正在登录...")
 
         def _run():
             try:
-                result = self.client.login_github_device_code()
-                self._sig.device_code_ready.emit(result)
+                result = self.client.login_jwt(email, password)
+                token = result["access_token"]
+                self.client.set_token(token)
+                user = self.client.get_me()
+                self._sig.login_success.emit(token)
             except Exception as e:
                 self._sig.login_error.emit(str(e))
-                QTimer.singleShot(0, lambda: self.btn_github.setEnabled(True))
+                QTimer.singleShot(0, lambda: self.btn_login.setEnabled(True))
 
         threading.Thread(target=_run, daemon=True).start()
 
-    def _on_device_code(self, data: dict):
-        self._device_code = data["device_code"]
-        user_code = data["user_code"]
-        uri = data["verification_uri"]
-
-        self.label_code.setText(user_code)
-        self.label_uri.setText(f"在浏览器中输入以上代码 — {uri}")
-        self.code_card.setVisible(True)
-        self.btn_github.setEnabled(True)
-        self._set_status("请在浏览器中完成 GitHub 授权")
-
-        self._start_polling()
-
-    def _open_browser(self):
-        webbrowser.open("https://github.com/login/device")
-
-    def _start_polling(self):
-        self._polling = True
-        interval = 5
-
-        def _poll():
-            nonlocal interval
-            while self._polling:
-                try:
-                    result = self.client.login_github_poll_token(self._device_code)
-                    self._sig.poll_result.emit(result)
-                    status = result.get("status")
-
-                    if status == "success":
-                        self._polling = False
-                        return
-                    elif status == "slow_down":
-                        interval = result.get("interval", interval + 5)
-                    elif status == "expired":
-                        self._sig.status_update.emit("登录已过期，请重新点击登录", True)
-                        self._polling = False
-                        return
-                    elif status == "denied":
-                        self._sig.status_update.emit("用户取消了授权", True)
-                        self._polling = False
-                        return
-                    elif status == "pending":
-                        self._sig.status_update.emit("等待扫码中...", False)
-                except Exception as e:
-                    if self._polling:
-                        self._sig.login_error.emit(str(e))
-                    self._polling = False
-                    return
-
-                time.sleep(interval)
-
-        threading.Thread(target=_poll, daemon=True).start()
-
-    def _on_poll_result(self, result: dict):
-        if result.get("status") == "success":
-            token = result["token"]
-            user = result.get("user", {})
-            self._set_status(f"登录成功！用户: {user.get('username', '')}")
-            self._sig.login_success.emit(token)
-
     def _on_login_success(self, token: str):
+        self.btn_login.setEnabled(True)
         self.on_login_success(token)
+
+    # ── Register ──
+
+    def _do_register(self):
+        email = self.input_reg_email.text().strip()
+        username = self.input_reg_username.text().strip()
+        password = self.input_reg_password.text().strip()
+
+        if not email or not username or not password:
+            QMessageBox.warning(self, "提示", "请填写所有字段")
+            return
+        if len(password) < 8:
+            QMessageBox.warning(self, "提示", "密码至少 8 位")
+            return
+
+        self.btn_register.setEnabled(False)
+        self._set_status("正在注册...")
+
+        def _run():
+            try:
+                result = self.client.register(email, password, username)
+                self._sig.register_ready.emit(result)
+            except Exception as e:
+                self._sig.register_error.emit(str(e))
+                QTimer.singleShot(0, lambda: self.btn_register.setEnabled(True))
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _on_register_ready(self, user: dict):
+        self.btn_register.setEnabled(True)
+        self._set_status(f"注册成功！用户名: {user.get('username', '')}，请登录")
+        self._switch_mode("login")
+        self.input_email.setText(self.input_reg_email.text())
+        self.input_reg_email.clear()
+        self.input_reg_username.clear()
+        self.input_reg_password.clear()
+
+    # ── Forgot password ──
+
+    def _forgot_password(self):
+        email = self.input_email.text().strip()
+        if not email:
+            QMessageBox.warning(self, "提示", "请先输入邮箱地址")
+            return
+
+        def _run():
+            try:
+                self.client.forgot_password(email)
+                QTimer.singleShot(0, lambda: QMessageBox.information(
+                    self, "密码重置", f"密码重置邮件已发送到 {email}（预留功能，暂不支持实际发信）",
+                ))
+            except Exception as e:
+                QTimer.singleShot(0, lambda: QMessageBox.critical(self, "发送失败", str(e)))
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    # ── Token paste ──
 
     def _apply_token(self):
         token = self.input_token.text().strip()

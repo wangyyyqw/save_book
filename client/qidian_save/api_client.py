@@ -23,12 +23,11 @@ class QidianSaveClient:
 
     Usage:
         client = QidianSaveClient("https://api.example.com")
-        dc = client.login_github_device_code()
-        result = client.login_github_poll_token(dc["device_code"])
-        client.set_token(result["token"])
+        result = client.login_jwt("user@example.com", "password")
+        client.set_token(result["access_token"])
     """
 
-    def __init__(self, base_url: str, token: str = None, api_key: str = None):
+    def __init__(self, base_url: str, token: str = None):
         self.base_url = base_url.rstrip("/")
         self.session = requests.Session()
         self.session.headers.update({"Accept": "application/json"})
@@ -47,14 +46,9 @@ class QidianSaveClient:
 
         if token:
             self.set_token(token)
-        if api_key:
-            self.set_api_key(api_key)
 
     def set_token(self, token: str):
         self.session.headers.update({"Authorization": f"Bearer {token}"})
-
-    def set_api_key(self, api_key: str):
-        self.session.headers.update({"X-API-Key": api_key})
 
     @staticmethod
     def _raise_on_error(resp: requests.Response):
@@ -77,37 +71,75 @@ class QidianSaveClient:
         self._raise_on_error(resp)
         return resp.json()
 
+    def _post_form(self, path: str, data: dict) -> dict:
+        """application/x-www-form-urlencoded POST（用于 /auth/jwt/login）"""
+        resp = self.session.post(
+            f"{self.base_url}{path}",
+            data=data,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=30,
+        )
+        self._raise_on_error(resp)
+        return resp.json()
+
     def _delete(self, path: str) -> dict:
         resp = self.session.delete(f"{self.base_url}{path}", timeout=30)
         self._raise_on_error(resp)
         return resp.json()
 
-    # ── Auth: GitHub Device Flow ──
+    def _patch(self, path: str, **kwargs) -> dict:
+        resp = self.session.patch(f"{self.base_url}{path}", **kwargs, timeout=30)
+        self._raise_on_error(resp)
+        return resp.json()
 
-    def login_github_device_code(self) -> dict:
-        """Step 1: 发起 GitHub Device Flow，返回 device_code + user_code + verification_uri"""
-        return self._post("/api/auth/github/device-code")
+    # ── Health ──
 
-    def login_github_poll_token(self, device_code: str) -> dict:
-        """Step 2/3: 轮询 GitHub 登录状态
+    def health_check(self) -> dict:
+        """健康检查（免认证）"""
+        return self._get("/api/health")
 
-        Returns:
-            {"status": "pending"|"slow_down"|"expired"|"denied"|"success",
-             "token": str?, "user": dict?, "interval": int?, "error": str?}
+    # ── Auth: fastapi-users ──
+
+    def register(self, email: str, password: str, username: str) -> dict:
+        """注册新用户（免认证）"""
+        return self._post("/auth/register", json={
+            "email": email, "password": password, "username": username,
+        })
+
+    def login_jwt(self, email: str, password: str) -> dict:
+        """邮箱+密码登录，返回 {"access_token": "...", "token_type": "bearer"}（免认证）
+
+        注意：使用 application/x-www-form-urlencoded。
         """
-        return self._post("/api/auth/github/poll-token", json={"device_code": device_code})
+        return self._post_form("/auth/jwt/login", {
+            "username": email, "password": password,
+        })
 
-    # ── Auth: legacy ──
-
-    def login(self, provider: str, code: str) -> dict:
-        return self._post("/api/auth/login", json={"provider": provider, "code": code})
+    def logout(self) -> dict:
+        """登出（使当前 token 失效）"""
+        return self._post("/auth/jwt/logout")
 
     def get_me(self) -> dict:
-        return self._get("/api/auth/me")
+        return self._get("/users/me")
 
-    def renew_api_key(self) -> dict:
-        """重新生成 API Key"""
-        return self._post("/api/auth/api-key/regenerate")
+    def update_profile(self, username: str = None, avatar: str = None) -> dict:
+        """更新当前用户信息（只传需要改的字段）"""
+        body = {}
+        if username is not None:
+            body["username"] = username
+        if avatar is not None:
+            body["avatar"] = avatar
+        return self._patch("/users/me", json=body)
+
+    def forgot_password(self, email: str) -> dict:
+        """发送密码重置邮件（免认证）"""
+        return self._post("/auth/forgot-password", json={"email": email})
+
+    def reset_password(self, token: str, password: str) -> dict:
+        """使用重置令牌设置新密码（免认证）"""
+        return self._post("/auth/reset-password", json={
+            "token": token, "password": password,
+        })
 
     # ── Backup ──
 
